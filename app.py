@@ -1,19 +1,33 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image
-import tensorflow as tf
 import numpy as np
 import io
 import os
+from ai_edge_litert import interpreter as litert_interpreter
 
 app = Flask(__name__)
 CORS(app)
 
-model = tf.keras.models.load_model("automated_wafer_inspection_cnn.keras")
+# Load TFLite model
+interpreter = litert_interpreter.Interpreter(
+    model_path="automated_wafer_inspection_cnn.tflite"
+)
+interpreter.allocate_tensors()
+
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
 class_names = [
-    "Center", "Donut", "Edge-Loc", "Edge-Ring",
-    "Local", "Near-Full", "Normal", "Random", "Scratch"
+    "Center",
+    "Donut",
+    "Edge-Loc",
+    "Edge-Ring",
+    "Local",
+    "Near-Full",
+    "Normal",
+    "Random",
+    "Scratch"
 ]
 
 @app.route("/")
@@ -34,19 +48,29 @@ def predict():
         img = Image.open(io.BytesIO(file.read())).convert("RGB")
         img = img.resize((224, 224))
 
-        img_array = np.array(img)
+        img_array = np.array(img, dtype=np.float32)
         img_array = np.expand_dims(img_array, axis=0)
 
-        prediction = model.predict(img_array, verbose=0)
+        # Run TFLite inference
+        interpreter.set_tensor(
+            input_details[0]["index"],
+            img_array
+        )
 
-        predicted_index = int(np.argmax(prediction[0]))
-        confidence = float(np.max(prediction[0]))
+        interpreter.invoke()
+
+        prediction = interpreter.get_tensor(
+            output_details[0]["index"]
+        )[0]
+
+        predicted_index = int(np.argmax(prediction))
+        confidence = float(prediction[predicted_index])
         predicted_class = class_names[predicted_index]
 
         status = "PASSED" if predicted_class == "Normal" else "DEFECTIVE"
 
         probabilities = {
-            class_names[i]: float(prediction[0][i])
+            class_names[i]: float(prediction[i])
             for i in range(len(class_names))
         }
 
